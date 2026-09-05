@@ -5,6 +5,7 @@ name = "blocksign-mcp-server"
 version = "0.0.1"
 edition = "2021"
 rust-version = "1.82"
+license = "MIT"
 
 [[bin]]
 name = "blocksign-mcp-server"
