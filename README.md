@@ -6,14 +6,27 @@ A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for
 Every signature blocksign produces is anchored to the **XRP Ledger** and
 **Bitcoin**, so agreements are *cryptographically provable* — not just asserted
 by a database. This MCP server lets AI agents create, send, negotiate, and
-verify legally binding agreements in a single call.
+verify legally binding agreements.
 
 ## Endpoint
 
 - **URL:** `https://mcp.blocksign.red/mcp`
 - **Transport:** Streamable HTTP (MCP `2025-06-18`, negotiates down to `2024-11-05`)
-- **Auth:** `Authorization: Bearer bsk_agent_*` — issue an agent-scoped key at
-  <https://blocksign.red/settings/api-keys>
+- **Auth (account mode):** `Authorization: Bearer bsk_agent_*` — issue an
+  agent-scoped key at <https://blocksign.red/settings/api-keys>
+
+## No API key? Guest mode
+
+Agents can drive multi-party signing with **no account and no key** — payment is
+the identity. Call `create_agreement` with no `Authorization` header and pass:
+
+- `payment` — a Stripe shared payment token (`spt_*`)
+- `sender` — `{ "name": "...", "email": "..." }`
+- `document` + 2+ `signers`
+
+blocksign charges the token, emails each signer a click-to-sign link, and
+returns the signing URLs + a check-back `status_url` + the public
+`verification_url`.
 
 ## Tools
 
@@ -49,6 +62,23 @@ and send with no human in the loop.
 npx @modelcontextprotocol/inspector https://mcp.blocksign.red/mcp
 ```
 
+### Add to your MCP client
+
+```json
+{
+  "mcpServers": {
+    "blocksign": {
+      "type": "http",
+      "url": "https://mcp.blocksign.red/mcp",
+      "headers": { "Authorization": "Bearer bsk_agent_YOUR_KEY" }
+    }
+  }
+}
+```
+
+(For guest mode, omit the `headers` block and pass `payment` + `sender` in the
+`create_agreement` call.)
+
 ### Run it yourself
 
 ```bash
@@ -58,7 +88,7 @@ cargo run
 ```
 
 Then `POST /mcp` with JSON-RPC, sending your `bsk_agent_*` key as
-`Authorization: Bearer <key>`.
+`Authorization: Bearer <key>` (or using guest mode with `payment`).
 
 ## About this repo
 

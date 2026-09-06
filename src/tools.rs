@@ -159,12 +159,21 @@ pub fn list_tools() -> Value {
 }
 
 /// Dispatch a `tools/call` request.
-pub async fn call_tool(params: Value, auth: &str, api: &ApiClient) -> Result<Value, String> {
+pub async fn call_tool(params: Value, auth: Option<&str>, api: &ApiClient) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing tool name".to_string())?;
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
+
+    // Guest (no-account) path: `create_agreement` with no Authorization header
+    // but a `payment` token routes to the keyless guest endpoint.
+    if name == "create_agreement" && auth.is_none() {
+        return create_guest_agreement(api, &args).await;
+    }
+
+    // Every other tool requires a key.
+    let auth = auth.ok_or_else(|| "missing Authorization header — pass bsk_agent_* key".to_string())?;
 
     let result = match name {
         "create_agreement" => call_api(api, "POST", "/v1/agent/agreements", auth, Some(&args)).await,
@@ -256,6 +265,42 @@ pub async fn call_tool(params: Value, auth: &str, api: &ApiClient) -> Result<Val
     }
 }
 
+/// Guest (no-account) `create_agreement`: map the MCP args to the keyless
+/// `POST /v1/public/agreements` request. Requires `payment` (Stripe shared
+/// token `spt_*`) and `sender` (name + email); payment is the sender identity.
+async fn create_guest_agreement(api: &ApiClient, args: &Value) -> Result<Value, String> {
+    let payment = args
+        .get("payment")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            "guest create_agreement requires 'payment' (a Stripe shared token spt_*)".to_string()
+        })?;
+
+    let sender = args.get("sender").cloned().unwrap_or_else(|| json!({}));
+    if sender.get("email").and_then(Value::as_str).is_none()
+        || sender.get("name").and_then(Value::as_str).is_none()
+    {
+        return Err("guest create_agreement requires sender.name and sender.email".into());
+    }
+
+    let body = json!({
+        "sender": sender,
+        "document": {
+            "text": args.get("document_text").cloned().unwrap_or(Value::Null),
+            "text_format": args.get("document_text_format").cloned().unwrap_or(Value::Null),
+            "base64": args.get("document_base64").cloned().unwrap_or(Value::Null),
+            "title": args.get("document_title").cloned().unwrap_or(Value::Null),
+        },
+        "signers": args.get("signers").cloned().unwrap_or_else(|| json!([])),
+        "fields": args.get("fields").cloned().unwrap_or(Value::Null),
+        "payment": { "token": payment },
+    });
+
+    api.post_public::<Value>("/v1/public/agreements", &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 async fn call_api(
     api: &ApiClient,
     method: &str,
@@ -324,14 +369,14 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_returns_error() {
         let api = ApiClient::new("http://nowhere");
-        let result = call_tool(json!({"name": "doesnt_exist"}), "Bearer x", &api).await;
+        let result = call_tool(json!({"name": "doesnt_exist"}), Some("Bearer x"), &api).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn missing_tool_name_returns_error() {
         let api = ApiClient::new("http://nowhere");
-        let result = call_tool(json!({}), "Bearer x", &api).await;
+        let result = call_tool(json!({}), Some("Bearer x"), &api).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("name"));
     }
@@ -440,5 +485,29 @@ mod tests {
             .filter_map(|v| v.as_i64())
             .collect();
         assert_eq!(enum_vals, vec![10, 50, 200]);
+    }
+
+    #[tokio::test]
+    async fn guest_create_requires_payment_and_sender() {
+        let api = ApiClient::new("http://nowhere");
+        // No payment -> error before any network call.
+        let no_payment = create_guest_agreement(
+            &api,
+            &json!({"sender": {"name": "A", "email": "a@x.com"}, "signers": []}),
+        )
+        .await;
+        assert!(no_payment.unwrap_err().contains("payment"));
+
+        // Payment but no sender -> error.
+        let no_sender = create_guest_agreement(&api, &json!({"payment": "spt_x"})).await;
+        assert!(no_sender.unwrap_err().contains("sender"));
+
+        // Missing name in sender -> error.
+        let no_name = create_guest_agreement(
+            &api,
+            &json!({"payment": "spt_x", "sender": {"email": "a@x.com"}}),
+        )
+        .await;
+        assert!(no_name.unwrap_err().contains("sender.name"));
     }
 }

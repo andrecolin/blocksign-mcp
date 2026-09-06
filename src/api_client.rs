@@ -65,6 +65,24 @@ impl ApiClient {
         Self::parse(resp).await
     }
 
+    /// POST with JSON body and NO Authorization header — for the keyless
+    /// guest endpoint (`/v1/public/agreements`) where payment is the identity.
+    pub async fn post_public<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, ApiError> {
+        let url = format!("{}{}", self.base, path);
+        let resp = self
+            .http
+            .post(&url)
+            .header("content-type", "application/json")
+            .json(body)
+            .send()
+            .await?;
+        Self::parse(resp).await
+    }
+
     /// POST with no body (used for /void).
     pub async fn post_empty<T: DeserializeOwned>(
         &self,

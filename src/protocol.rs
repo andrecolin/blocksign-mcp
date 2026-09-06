@@ -99,16 +99,22 @@ pub async fn handle_request(
         "ping" => JsonRpcResponse::ok(id, json!({})),
         "tools/list" => JsonRpcResponse::ok(id, tools::list_tools()),
         "tools/call" => {
-            let auth = match auth {
-                Some(a) => a,
-                None => {
-                    return JsonRpcResponse::err(
-                        id,
-                        AUTH_REQUIRED,
-                        "missing Authorization header — pass bsk_agent_* key",
-                    );
-                }
-            };
+            // Guest (no-account) path: `create_agreement` may be called with no
+            // Authorization header when the args carry a `payment` token — the
+            // server routes it to the keyless guest endpoint and the payment is
+            // the identity. Every other tool still requires a key.
+            let tool_name = req
+                .params
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if auth.is_none() && tool_name != "create_agreement" {
+                return JsonRpcResponse::err(
+                    id,
+                    AUTH_REQUIRED,
+                    "missing Authorization header — pass bsk_agent_* key",
+                );
+            }
             match tools::call_tool(req.params, auth, api).await {
                 Ok(v) => JsonRpcResponse::ok(id, v),
                 Err(e) => JsonRpcResponse::err(id, INTERNAL_ERROR, e),
@@ -161,7 +167,7 @@ fn handle_initialize(id: Option<Value>, params: Value) -> JsonRpcResponse {
             "name": "blocksign-mcp-server",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "Use these tools to create blockchain-anchored e-signature agreements. Pass your bsk_agent_* API key as Authorization: Bearer in every call. Start with `list_templates` to discover built-in contract types, or `create_agreement` for a one-call signing flow."
+        "instructions": "Use these tools to create blockchain-anchored e-signature agreements. With an API key, pass Authorization: Bearer bsk_agent_*. No key? Call create_agreement with 'payment' (a Stripe shared token spt_*) and 'sender' (name + email) — we charge and treat the payer as the sender. Start with `list_templates`, or `create_agreement` for a one-call signing flow."
     });
     JsonRpcResponse::ok(id, result)
 }
